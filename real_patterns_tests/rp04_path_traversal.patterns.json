@@ -1,0 +1,11 @@
+[
+    {
+        "vulnerability": "PathTraversal",
+        "sources": ["get", "input"],
+        "sanitizers": ["basename", "normpath", "realpath", "secure_filename"],
+        "sinks": ["open", "send_file", "FileResponse"],
+        "implicit": "no"
+    }
+]
+
+

@@ -1,0 +1,41 @@
+[
+    {
+        "vulnerability": "CommandInjection_1",
+        "source": [
+            "get",
+            1
+        ],
+        "sink": [
+            "system",
+            2
+        ],
+        "flows": [
+            [
+                "explicit",
+                []
+            ]
+        ]
+    },
+    {
+        "vulnerability": "CommandInjection_2",
+        "source": [
+            "get",
+            1
+        ],
+        "sink": [
+            "system",
+            3
+        ],
+        "flows": [
+            [
+                "explicit",
+                [
+                    [
+                        "shlex_quote",
+                        3
+                    ]
+                ]
+            ]
+        ]
+    }
+]

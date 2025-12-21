@@ -1,0 +1,41 @@
+[
+    {
+        "vulnerability": "OpenRedirect_1",
+        "source": [
+            "get",
+            1
+        ],
+        "sink": [
+            "redirect",
+            2
+        ],
+        "flows": [
+            [
+                "explicit",
+                []
+            ]
+        ]
+    },
+    {
+        "vulnerability": "OpenRedirect_2",
+        "source": [
+            "get",
+            1
+        ],
+        "sink": [
+            "redirect",
+            3
+        ],
+        "flows": [
+            [
+                "explicit",
+                [
+                    [
+                        "validate_url",
+                        3
+                    ]
+                ]
+            ]
+        ]
+    }
+]

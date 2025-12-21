@@ -1,0 +1,41 @@
+[
+    {
+        "vulnerability": "SSRF_1",
+        "source": [
+            "get",
+            1
+        ],
+        "sink": [
+            "urlopen",
+            2
+        ],
+        "flows": [
+            [
+                "explicit",
+                []
+            ]
+        ]
+    },
+    {
+        "vulnerability": "SSRF_2",
+        "source": [
+            "get",
+            1
+        ],
+        "sink": [
+            "urlopen",
+            3
+        ],
+        "flows": [
+            [
+                "explicit",
+                [
+                    [
+                        "urljoin",
+                        3
+                    ]
+                ]
+            ]
+        ]
+    }
+]
