@@ -1,0 +1,98 @@
+[
+    {
+        "vulnerability": "XSS",
+        "sources": [
+            "get",
+            "input"
+        ],
+        "sanitizers": [
+            "escape",
+            "clean",
+            "html_escape"
+        ],
+        "sinks": [
+            "mark_safe",
+            "Markup",
+            "Response",
+            "render_template"
+        ],
+        "implicit": "no"
+    },
+    {
+        "vulnerability": "SQLi",
+        "sources": [
+            "get",
+            "input"
+        ],
+        "sanitizers": [
+            "mogrify",
+            "escape_string",
+            "quote"
+        ],
+        "sinks": [
+            "execute",
+            "executemany",
+            "raw",
+            "RawSQL"
+        ],
+        "implicit": "no"
+    },
+    {
+        "vulnerability": "CommandInjection",
+        "sources": [
+            "get",
+            "input"
+        ],
+        "sanitizers": [
+            "quote",
+            "shlex_quote"
+        ],
+        "sinks": [
+            "system",
+            "popen",
+            "Popen",
+            "run",
+            "call"
+        ],
+        "implicit": "no"
+    },
+    {
+        "vulnerability": "PathTraversal",
+        "sources": [
+            "get",
+            "input"
+        ],
+        "sanitizers": [
+            "basename",
+            "normpath",
+            "realpath",
+            "secure_filename"
+        ],
+        "sinks": [
+            "open",
+            "send_file",
+            "FileResponse"
+        ],
+        "implicit": "no"
+    },
+    {
+        "vulnerability": "SSRF",
+        "sources": [
+            "get",
+            "input"
+        ],
+        "sanitizers": [
+            "urlparse",
+            "urljoin",
+            "validate_url"
+        ],
+        "sinks": [
+            "urlopen",
+            "request",
+            "urlretrieve"
+        ],
+        "implicit": "no"
+    }
+]
+
+
