@@ -1,0 +1,18 @@
+[
+  {
+    "vulnerability": "XSS",
+    "sources": ["get"],
+    "sanitizers": ["escape"],
+    "sinks": ["mark_safe"],
+    "implicit": "no"
+  },
+  {
+    "vulnerability": "SQLi",
+    "sources": ["get"],
+    "sanitizers": ["escape_string"],
+    "sinks": ["execute"],
+    "implicit": "no"
+  }
+]
+
+

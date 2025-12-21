@@ -1,0 +1,58 @@
+[
+    {
+        "vulnerability": "SQLi_1",
+        "source": [
+            "request",
+            1
+        ],
+        "sink": [
+            "execute",
+            5
+        ],
+        "flows": [
+            [
+                "explicit",
+                [
+                    [
+                        "escape",
+                        3
+                    ]
+                ]
+            ]
+        ]
+    },
+    {
+        "vulnerability": "SQLi_2",
+        "source": [
+            "request",
+            2
+        ],
+        "sink": [
+            "execute",
+            5
+        ],
+        "flows": [
+            [
+                "explicit",
+                []
+            ]
+        ]
+    },
+    {
+        "vulnerability": "SQLi_3",
+        "source": [
+            "db",
+            5
+        ],
+        "sink": [
+            "execute",
+            5
+        ],
+        "flows": [
+            [
+                "explicit",
+                []
+            ]
+        ]
+    }
+]

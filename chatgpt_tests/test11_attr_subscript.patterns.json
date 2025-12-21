@@ -1,0 +1,11 @@
+[
+  {
+    "vulnerability": "XSS",
+    "sources": ["POST"],
+    "sanitizers": [],
+    "sinks": ["mark_safe"],
+    "implicit": "no"
+  }
+]
+
+

@@ -1,0 +1,19 @@
+[
+    {
+        "vulnerability": "XSS_1",
+        "source": [
+            "request",
+            1
+        ],
+        "sink": [
+            "mark_safe",
+            2
+        ],
+        "flows": [
+            [
+                "explicit",
+                []
+            ]
+        ]
+    }
+]

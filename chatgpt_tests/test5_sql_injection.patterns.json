@@ -1,0 +1,11 @@
+[
+  {
+    "vulnerability": "SQLi",
+    "sources": ["get"],
+    "sanitizers": ["escape_string"],
+    "sinks": ["execute"],
+    "implicit": "no"
+  }
+]
+
+

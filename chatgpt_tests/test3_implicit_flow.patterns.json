@@ -1,0 +1,11 @@
+[
+  {
+    "vulnerability": "SQLi",
+    "sources": ["get"],
+    "sanitizers": [],
+    "sinks": ["execute"],
+    "implicit": "yes"
+  }
+]
+
+
