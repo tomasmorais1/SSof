@@ -1,6 +1,26 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+"""
+py_analyser.py
+
+Static taint analysis for Python *slices* (small code fragments) according to vulnerability patterns.
+
+High-level pipeline:
+  1) Load vulnerability patterns from JSON -> Pattern/Policy
+  2) Parse the slice into a Python AST (ast.parse)
+  3) Walk the AST:
+       - eval_expr(...) returns a MultiLabel: taint flows carried by an expression value
+       - exec_stmt(...) updates a MultiLabelling: map from variable-like names -> MultiLabel
+       - detect sinks on calls and assignment targets, recording flows in Vulnerabilities
+  4) Write JSON output to ./output/<slice>.output.json
+
+Key ideas:
+  - Labels track *flows* from (source name, line) to sinks, with a list of sanitizers that intercepted them.
+  - Implicit flows are modeled via a "program counter" taint (pc): taint of enclosing conditions/guards.
+  - Loops are approximated by a bounded fixpoint: iterate until labels stabilize or we hit a max bound.
+"""
+
 import ast
 import json
 import os
@@ -17,8 +37,111 @@ SinkOcc = Tuple[str, int]  # (name, lineno)
 Flow = Tuple[FlowKind, SourceOcc, SanitizerSeq]
 
 
+# -----------------------------------------------------------------------------
+# Debug tracing (opt-in)
+#
+# IMPORTANT: The project spec expects the analyser to write ONLY the JSON output
+# file and not print extra output. For that reason, debug prints are guarded by
+# an environment variable and go to stderr.
+#
+# Usage:
+#   PY_ANALYSER_DEBUG=1 python3 ./py_analyser.py <slice.py> <patterns.json>
+# -----------------------------------------------------------------------------
+
+_DEBUG = os.environ.get("PY_ANALYSER_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+_DEBUG_LEVEL = int(os.environ.get("PY_ANALYSER_DEBUG_LEVEL", "1").strip() or "1") if _DEBUG else 0
+_DBG_DEPTH = 0
+_DBG_EVENT = 0
+_DBG_OUT = sys.stderr
+
+
+def _dbg(msg: str) -> None:
+    if not _DEBUG:
+        return
+    if _DEBUG_LEVEL <= 0:
+        return
+    global _DBG_EVENT
+    _DBG_EVENT += 1
+    indent = "    " * _DBG_DEPTH
+    # Print an extra blank line after each log entry for readability.
+    print(f"{_DBG_EVENT:05d} {indent}{msg}", file=_DBG_OUT)
+    print("", file=_DBG_OUT)
+
+
+class _DbgScope:
+    def __init__(self, title: str) -> None:
+        self._title = title
+
+    def __enter__(self) -> None:
+        global _DBG_DEPTH
+        _dbg(f"ENTER {self._title}")
+        _DBG_DEPTH += 1
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        global _DBG_DEPTH
+        _DBG_DEPTH = max(0, _DBG_DEPTH - 1)
+        if exc_type is not None:
+            _dbg(f"EXIT  {self._title} (EXC {exc_type.__name__}: {exc})")
+        else:
+            _dbg(f"EXIT  {self._title}")
+
+
+def _dbg_init() -> None:
+    """
+    Configure debug output.
+
+    - Default: stderr
+    - If PY_ANALYSER_DEBUG_LOG is set: write to that file (creating parent dirs).
+    - You can increase verbosity with PY_ANALYSER_DEBUG_LEVEL=2.
+    """
+    global _DBG_OUT
+    if not _DEBUG or _DEBUG_LEVEL <= 0:
+        return
+    path = os.environ.get("PY_ANALYSER_DEBUG_LOG", "").strip()
+    if not path:
+        return
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    _DBG_OUT = open(path, "w", encoding="utf-8")  # intentionally not closed (process exit)
+    _dbg(f"Debug log file: {path}")
+
+
+def _ml_summary(ml: "MultiLabel") -> str:
+    # small, stable summary: number of flows per vulnerability
+    parts = []
+    for v in ml._policy.vulnerability_names:
+        parts.append(f"{v}:{len(ml.label_for(v).flows())}")
+    return "{" + ", ".join(parts) + "}"
+
+
+def _label_dump(label: "Label") -> str:
+    return "[" + ", ".join(f"{kind}:{src[0]}@{src[1]} sans={list(sans)}" for (kind, src, sans) in label.flows()) + "]"
+
+
+def _ml_dump(ml: "MultiLabel") -> str:
+    parts = []
+    for v in ml._policy.vulnerability_names:
+        parts.append(f"{v}={_label_dump(ml.label_for(v))}")
+    return "{ " + "; ".join(parts) + " }"
+
+
+def _lab_summary(lab: "MultiLabelling") -> str:
+    keys = sorted(lab._map.keys())
+    if len(keys) > 10:
+        keys = keys[:10] + ["..."]
+    return f"keys={keys}"
+
+
+def _lab_dump(lab: "MultiLabelling") -> str:
+    parts = []
+    for name in sorted(lab._map.keys()):
+        ml, uninit = lab._map[name]
+        parts.append(f"{name} (uninit={uninit}) = {_ml_dump(ml)}")
+    return "\\n".join(parts) if parts else "<empty>"
+
+
 @dataclass(frozen=True)
 class Pattern:
+    """One vulnerability pattern: sources/sanitizers/sinks + whether to consider implicit flows."""
     vulnerability: str
     sources: Tuple[str, ...]
     sanitizers: Tuple[str, ...]
@@ -36,6 +159,14 @@ class Pattern:
 
 
 class Policy:
+    """
+    Pattern database / policy helper.
+
+    Given a name (e.g., "execute"), quickly answers:
+      - for which vulnerabilities is it a source?
+      - for which vulnerabilities is it a sanitizer?
+      - for which vulnerabilities is it a sink?
+    """
     def __init__(self, patterns: Sequence[Pattern]) -> None:
         self._patterns: Dict[str, Pattern] = {p.vulnerability: p for p in patterns}
 
@@ -125,6 +256,11 @@ class Label:
 
 
 class MultiLabel:
+    """
+    A "label per vulnerability": maps vulnerability_name -> Label.
+
+    This is how we track multiple vulnerabilities simultaneously while traversing the AST.
+    """
     def __init__(self, policy: Policy) -> None:
         self._policy = policy
         self._labels: Dict[str, Label] = {v: Label() for v in policy.vulnerability_names}
@@ -172,6 +308,16 @@ class MultiLabel:
 
 
 class MultiLabelling:
+    """
+    Variable store for the analysis.
+
+    Maps a (string) name to a MultiLabel. Names include:
+      - variables: "x"
+      - attributes (flattened): "obj.field"
+
+    It also tracks whether a name may be uninitialized on some path (used to model the
+    project spec rule: "non-instantiated variables/fields are sources by default").
+    """
     def __init__(self, policy: Policy) -> None:
         self._policy = policy
         # name -> (multilabel, may_be_uninitialized)
@@ -220,6 +366,12 @@ class MultiLabelling:
 
 
 class Vulnerabilities:
+    """
+    Accumulates all detected illegal flows to sinks, and formats them for final output.
+
+    Output records are grouped by vulnerability base name (e.g., "XSS") and numbered
+    incrementally to match fixture expectations ("XSS_1", "XSS_2", ...).
+    """
     def __init__(self) -> None:
         self._counters: Dict[str, int] = {}
         # Output ordering in the provided fixtures is grouped by vulnerability base name,
@@ -240,6 +392,10 @@ class Vulnerabilities:
         sink: SinkOcc,
         flows: Sequence[Flow],
     ) -> None:
+        if _DEBUG and _DEBUG_LEVEL > 0:
+            _dbg(f"VULN add_illegal_flows base={vulnerability_base} sink={sink}")
+            if _DEBUG_LEVEL >= 2:
+                _dbg(f"  flows={[(k, s, list(sa)) for (k, s, sa) in flows]}")
         # Group by source occurrence, preserving first-seen order.
         grouped: Dict[SourceOcc, List[Tuple[FlowKind, SanitizerSeq]]] = {}
         source_order: List[SourceOcc] = []
@@ -277,6 +433,7 @@ class Vulnerabilities:
 
 
 def _func_name(func: ast.expr) -> Optional[str]:
+    """Return the function name for Name(...) or Attribute(...). For complex calls, return None."""
     if isinstance(func, ast.Name):
         return func.id
     if isinstance(func, ast.Attribute):
@@ -305,6 +462,38 @@ def _target_names(t: ast.expr) -> Tuple[Optional[str], Optional[str]]:
 
 
 def eval_expr(
+    node: ast.AST,
+    policy: Policy,
+    lab: MultiLabelling,
+    vulns: Vulnerabilities,
+    pc: MultiLabel,
+) -> MultiLabel:
+    """
+    Expression semantics: returns a MultiLabel describing taint carried by the value of `node`.
+
+    Rules of thumb used here:
+      - Constants carry no taint.
+      - Names read taint from the current MultiLabelling, but can also be sources according to patterns.
+      - Non-instantiated names/fields are treated as sources for *all* vulnerabilities (project spec).
+      - Composite expressions combine taint of their parts (e.g., BinOp combines left+right).
+      - Calls:
+          * combine taint from args (+ receiver for method calls)
+          * apply sanitizer if function name is in pattern sanitizers
+          * detect sink if function name is in pattern sinks
+    """
+    if _DEBUG and _DEBUG_LEVEL > 0:
+        node_type = type(node).__name__
+        lineno = getattr(node, "lineno", None)
+        with _DbgScope(f"eval_expr {node_type} lineno={lineno} pc={_ml_summary(pc)} lab[{_lab_summary(lab)}]"):
+            out = _eval_expr_impl(node, policy, lab, vulns, pc)
+            _dbg(f"RETURN eval_expr -> {_ml_summary(out)}")
+            if _DEBUG_LEVEL >= 2:
+                _dbg(f"  RETURN full -> {_ml_dump(out)}")
+            return out
+    return _eval_expr_impl(node, policy, lab, vulns, pc)
+
+
+def _eval_expr_impl(
     node: ast.AST,
     policy: Policy,
     lab: MultiLabelling,
@@ -383,6 +572,7 @@ def eval_expr(
         fn = _func_name(node.func)
         if fn is None:
             return MultiLabel(policy)
+        _dbg(f"Call fn={fn} lineno={getattr(node, 'lineno', None)}")
 
         # 1) combine argument labels in order
         args_ml = MultiLabel(policy)
@@ -391,28 +581,40 @@ def eval_expr(
         for kw in node.keywords:
             if kw.value is not None:
                 args_ml = args_ml.combine(eval_expr(kw.value, policy, lab, vulns, pc))
+        _dbg(f"  args_ml(after args)={_ml_summary(args_ml)}")
+        if _DEBUG_LEVEL >= 2:
+            _dbg(f"  args_ml(after args) full={_ml_dump(args_ml)}")
 
         # Calls are executed under the current program counter; the returned value (and the
         # information reaching a sink through arguments) may be implicitly influenced by it.
         # This is important for the "regions/guards" fixture where sanitizers in guards
         # can intercept implicit flows.
         args_ml = args_ml.combine(pc.to_implicit())
+        _dbg(f"  args_ml(after pc)={_ml_summary(args_ml)}")
 
         # 2) add function-name-as-source (filtered by patterns)
         # (This ordering matches the provided fixtures: args sources first, then call-name sources)
         args_ml = args_ml.combine(_source_from_callname(policy, fn, node.lineno))
+        _dbg(f"  args_ml(after callname-as-source)={_ml_summary(args_ml)}")
 
         # 3) include receiver/base object label (e.g., `b` in `b.m()`)
         base_expr = _base_expr_of_call(node.func)
         if base_expr is not None:
             args_ml = args_ml.combine(eval_expr(base_expr, policy, lab, vulns, pc))
+            _dbg(f"  args_ml(after receiver)={_ml_summary(args_ml)}")
 
         # 4) sanitizer application (filtered)
         out_ml = args_ml
         if policy.vulns_with_sanitizer(fn):
+            _dbg(f"  apply_sanitizer_filtered sanitizer={fn} lineno={node.lineno} to vulns={policy.vulns_with_sanitizer(fn)}")
             out_ml = out_ml.apply_sanitizer_filtered(fn, node.lineno)
+            _dbg(f"  out_ml(after sanitizer)={_ml_summary(out_ml)}")
+            if _DEBUG_LEVEL >= 2:
+                _dbg(f"  out_ml(after sanitizer) full={_ml_dump(out_ml)}")
 
         # 5) sink detection: implicit flows are already included in out_ml (via pc above)
+        if policy.vulns_with_sink(fn):
+            _dbg(f"  detect sink={fn} lineno={node.lineno} for vulns={policy.vulns_with_sink(fn)}")
         _detect_sink_call(policy, vulns, fn, node.lineno, out_ml)
 
         return out_ml
@@ -462,6 +664,7 @@ def _detect_sink_call(
     sink_lineno: int,
     ml: MultiLabel,
 ) -> None:
+    """If `sink_name` is a sink for some patterns, record flows that reached it."""
     sink: SinkOcc = (sink_name, sink_lineno)
     for v in policy.vulns_with_sink(sink_name):
         flows = ml.label_for(v).flows()
@@ -469,6 +672,7 @@ def _detect_sink_call(
             flows = [f for f in flows if f[0] == "explicit"]
 
         if flows:
+            _dbg(f"  SINK-HIT vuln={v} sink={sink} flows={[(k, s, list(sa)) for (k, s, sa) in flows]}")
             vulns.add_illegal_flows(v, sink, flows)
 
 
@@ -481,6 +685,7 @@ def exec_stmt_list(
     *,
     while_unroll: int = 3,
 ) -> MultiLabelling:
+    """Execute a list of statements in order, threading the MultiLabelling through."""
     cur = lab
     for s in stmts:
         cur = exec_stmt(s, policy, cur, vulns, pc, while_unroll=while_unroll)
@@ -496,13 +701,47 @@ def exec_stmt(
     *,
     while_unroll: int = 3,
 ) -> MultiLabelling:
+    if _DEBUG and _DEBUG_LEVEL > 0:
+        node_type = type(node).__name__
+        lineno = getattr(node, "lineno", None)
+        with _DbgScope(f"exec_stmt {node_type} lineno={lineno} pc={_ml_summary(pc)} lab[{_lab_summary(lab)}]"):
+            out = _exec_stmt_impl(node, policy, lab, vulns, pc, while_unroll=while_unroll)
+            _dbg(f"RETURN exec_stmt -> lab[{_lab_summary(out)}]")
+            if _DEBUG_LEVEL >= 2:
+                _dbg("  lab dump:")
+                for line in _lab_dump(out).splitlines():
+                    _dbg("  " + line)
+            return out
+    return _exec_stmt_impl(node, policy, lab, vulns, pc, while_unroll=while_unroll)
+
+
+def _exec_stmt_impl(
+    node: ast.stmt,
+    policy: Policy,
+    lab: MultiLabelling,
+    vulns: Vulnerabilities,
+    pc: MultiLabel,
+    *,
+    while_unroll: int = 3,
+) -> MultiLabelling:
+    """
+    Statement semantics: updates and returns the MultiLabelling after executing `node`.
+
+    Most important cases:
+      - Assign / AugAssign: update the target's label from RHS label + pc implicit label.
+      - If: fork the labelling, analyze both branches under pc updated with condition taint, then join.
+      - While / For: bounded fixpoint iteration (join-back) to approximate unbounded repetition.
+      - Expr: evaluate for sink detection side effects (e.g., a call used as a statement).
+    """
     if isinstance(node, ast.Expr):
         _ = eval_expr(node.value, policy, lab, vulns, pc)
         return lab
 
     if isinstance(node, ast.Assign):
         value_ml = eval_expr(node.value, policy, lab, vulns, pc)
+        # Any assignment under a tainted guard should be implicitly tainted by that guard (pc).
         incoming = value_ml.combine(pc.to_implicit())
+        _dbg(f"Assign incoming={_ml_summary(incoming)}")
 
         # support multiple targets; slices mostly use 1
         for tgt in node.targets:
@@ -511,9 +750,11 @@ def exec_stmt(
             # Update labelling map for assignments
             if isinstance(tgt, ast.Name):
                 lab.set(tgt.id, incoming)
+                _dbg(f"  set {tgt.id} = { _ml_summary(incoming) }")
             elif isinstance(tgt, ast.Attribute) and isinstance(tgt.value, ast.Name):
                 # attribute key
                 lab.set(f"{tgt.value.id}.{tgt.attr}", incoming)
+                _dbg(f"  set {tgt.value.id}.{tgt.attr} = { _ml_summary(incoming) }")
                 # do not auto-instantiate the base object label (per fixtures)
             elif isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name):
                 # Writing to a subscript updates the container, and information can flow
@@ -523,6 +764,7 @@ def exec_stmt(
                 prev_container = lab.get(container) if lab.has(container) else MultiLabel(policy)
                 new_container = prev_container.combine(idx_ml).combine(incoming)
                 lab.set(container, new_container)
+                _dbg(f"  set {container} (subscript write) = { _ml_summary(new_container) }")
                 _detect_sink_assignment(policy, vulns, container, getattr(tgt, "lineno", node.lineno), new_container, pc)
                 continue
 
@@ -567,6 +809,7 @@ def exec_stmt(
         # New guards (conditions) dominate the region they enclose; to match the reference
         # outputs, prioritize the newly-added implicit flows ahead of outer pc flows.
         pc2 = cond_ml.to_implicit().combine(pc)
+        _dbg(f"If pc2={_ml_summary(pc2)}")
 
         then_lab = exec_stmt_list(node.body, policy, lab.copy(), vulns, pc2, while_unroll=while_unroll)
         else_lab = exec_stmt_list(node.orelse, policy, lab.copy(), vulns, pc2, while_unroll=while_unroll) if node.orelse else lab.copy()
@@ -581,15 +824,18 @@ def exec_stmt(
 
         for _ in range(max(0, while_unroll)):
             before = cur.fingerprint()
+            _dbg(f"While iter: cur={_lab_summary(cur)}")
 
             cond_ml = eval_expr(node.test, policy, cur, vulns, pc)
             pc2 = cond_ml.to_implicit().combine(pc)
+            _dbg(f"  while pc2={_ml_summary(pc2)}")
             body_lab = exec_stmt_list(node.body, policy, cur.copy(), vulns, pc2, while_unroll=while_unroll)
 
             out_lab = out_lab.combine(body_lab)  # may exit after this iteration
             cur = cur.combine(body_lab)  # may continue; join back to head
 
             if cur.fingerprint() == before:
+                _dbg("  while fixpoint reached; break")
                 break
 
         return out_lab
@@ -639,6 +885,7 @@ def _detect_sink_assignment(
     incoming: MultiLabel,
     pc: MultiLabel,
 ) -> None:
+    """Sink detection for assignment targets (variable names or attribute names)."""
     sink: SinkOcc = (sink_name, sink_lineno)
     for v in policy.vulns_with_sink(sink_name):
         flows = incoming.label_for(v).flows()
@@ -649,6 +896,7 @@ def _detect_sink_assignment(
 
 
 def _load_patterns(path: str) -> List[Pattern]:
+    """Load patterns from JSON file -> list[Pattern]. Assumes input file is well-formed."""
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
     patterns: List[Pattern] = []
@@ -666,6 +914,15 @@ def _load_patterns(path: str) -> List[Pattern]:
 
 
 def main(argv: List[str]) -> int:
+    """
+    CLI entry point.
+
+    Usage:
+      python ./py_analyser.py <slice.py> <patterns.json>
+
+    Writes:
+      ./output/<slice>.output.json
+    """
     if len(argv) != 3:
         print("Usage: python ./py_analyser.py <path_to_slice.py> <path_to_patterns.json>", file=sys.stderr)
         return 2
@@ -673,16 +930,25 @@ def main(argv: List[str]) -> int:
     slice_path = argv[1]
     patterns_path = argv[2]
 
+    _dbg_init()
+    _dbg(f"MAIN slice={slice_path} patterns={patterns_path}")
     with open(slice_path, "r", encoding="utf-8") as f:
         code = f.read()
 
     patterns = _load_patterns(patterns_path)
     policy = Policy(patterns)
+    _dbg(f"Loaded patterns: {[p.vulnerability for p in patterns]}")
+    if _DEBUG_LEVEL >= 2:
+        for p in patterns:
+            _dbg(f"  Pattern {p.vulnerability} sources={list(p.sources)} sanitizers={list(p.sanitizers)} sinks={list(p.sinks)} implicit={p.implicit}")
 
     tree = ast.parse(code)
     vulns = Vulnerabilities()
     lab = MultiLabelling(policy)
     pc = MultiLabel(policy)
+    if _DEBUG_LEVEL >= 2:
+        _dbg(f"Initial pc={_ml_dump(pc)}")
+        _dbg(f"Initial lab={_lab_dump(lab)}")
 
     if isinstance(tree, ast.Module):
         _ = exec_stmt_list(tree.body, policy, lab, vulns, pc)
