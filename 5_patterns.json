@@ -3,18 +3,22 @@
         "vulnerability": "XSS",
         "sources": [
             "get",
-            "input"
+            "input",
+            "get_json"
         ],
         "sanitizers": [
             "escape",
+            "html_escape",
             "clean",
-            "html_escape"
+            "bleach_clean",
+            "sanitize"
         ],
         "sinks": [
             "mark_safe",
             "Markup",
-            "Response",
-            "render_template"
+            "render_template",
+            "render_template_string",
+            "make_response"
         ],
         "implicit": "no"
     },
@@ -22,12 +26,15 @@
         "vulnerability": "SQLi",
         "sources": [
             "get",
-            "input"
+            "input",
+            "get_json"
         ],
         "sanitizers": [
             "mogrify",
             "escape_string",
-            "quote"
+            "quote",
+            "parametrize",
+            "parameterize"
         ],
         "sinks": [
             "execute",
@@ -41,7 +48,8 @@
         "vulnerability": "CommandInjection",
         "sources": [
             "get",
-            "input"
+            "input",
+            "get_json"
         ],
         "sanitizers": [
             "quote",
@@ -52,43 +60,49 @@
             "popen",
             "Popen",
             "run",
-            "call"
+            "call",
+            "check_call",
+            "check_output"
         ],
-        "implicit": "no"
+        "implicit": "yes"
     },
     {
         "vulnerability": "PathTraversal",
         "sources": [
             "get",
-            "input"
+            "input",
+            "get_json"
         ],
         "sanitizers": [
             "basename",
             "normpath",
             "realpath",
+            "abspath",
             "secure_filename"
         ],
         "sinks": [
             "open",
             "send_file",
-            "FileResponse"
+            "FileResponse",
+            "send_from_directory"
         ],
-        "implicit": "no"
+        "implicit": "yes"
     },
     {
         "vulnerability": "SSRF",
         "sources": [
             "get",
-            "input"
+            "input",
+            "get_json"
         ],
         "sanitizers": [
-            "urlparse",
-            "urljoin",
-            "validate_url"
+            "validate_url",
+            "is_safe_url",
+            "is_private_ip",
+            "is_safe_host"
         ],
         "sinks": [
             "urlopen",
-            "request",
             "urlretrieve"
         ],
         "implicit": "no"
