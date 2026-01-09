@@ -1,0 +1,11 @@
+[
+    {
+        "vulnerability": "SSRF",
+        "sources": ["get", "input"],
+        "sanitizers": ["urlparse", "urljoin", "validate_url"],
+        "sinks": ["urlopen", "request", "urlretrieve"],
+        "implicit": "no"
+    }
+]
+
+

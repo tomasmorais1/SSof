@@ -1,0 +1,11 @@
+[
+    {
+        "vulnerability": "InsecureDeserialization",
+        "sources": ["get", "input"],
+        "sanitizers": [],
+        "sinks": ["loads"],
+        "implicit": "no"
+    }
+]
+
+

@@ -1,0 +1,11 @@
+[
+    {
+        "vulnerability": "CommandInjection",
+        "sources": ["get", "input"],
+        "sanitizers": ["quote", "shlex_quote"],
+        "sinks": ["system", "popen", "Popen", "run", "call"],
+        "implicit": "no"
+    }
+]
+
+

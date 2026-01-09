@@ -1,0 +1,19 @@
+[
+    {
+        "vulnerability": "InsecureDeserialization_1",
+        "source": [
+            "get",
+            1
+        ],
+        "sink": [
+            "loads",
+            2
+        ],
+        "flows": [
+            [
+                "explicit",
+                []
+            ]
+        ]
+    }
+]

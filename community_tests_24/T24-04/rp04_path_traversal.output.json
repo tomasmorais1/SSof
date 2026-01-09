@@ -1,0 +1,41 @@
+[
+    {
+        "vulnerability": "PathTraversal_1",
+        "source": [
+            "get",
+            1
+        ],
+        "sink": [
+            "open",
+            2
+        ],
+        "flows": [
+            [
+                "explicit",
+                []
+            ]
+        ]
+    },
+    {
+        "vulnerability": "PathTraversal_2",
+        "source": [
+            "get",
+            1
+        ],
+        "sink": [
+            "open",
+            3
+        ],
+        "flows": [
+            [
+                "explicit",
+                [
+                    [
+                        "basename",
+                        3
+                    ]
+                ]
+            ]
+        ]
+    }
+]

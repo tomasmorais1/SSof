@@ -1,0 +1,36 @@
+[
+    {
+        "vulnerability": "CommandInjection_1",
+        "source": [
+            "get",
+            1
+        ],
+        "sink": [
+            "system",
+            3
+        ],
+        "flows": [
+            [
+                "implicit",
+                []
+            ]
+        ]
+    },
+    {
+        "vulnerability": "CommandInjection_2",
+        "source": [
+            "get",
+            1
+        ],
+        "sink": [
+            "system",
+            5
+        ],
+        "flows": [
+            [
+                "implicit",
+                []
+            ]
+        ]
+    }
+]

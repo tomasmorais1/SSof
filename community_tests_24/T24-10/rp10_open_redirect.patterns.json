@@ -1,0 +1,11 @@
+[
+    {
+        "vulnerability": "OpenRedirect",
+        "sources": ["get", "input"],
+        "sanitizers": ["validate_url"],
+        "sinks": ["redirect"],
+        "implicit": "no"
+    }
+]
+
+
